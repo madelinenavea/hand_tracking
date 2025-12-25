@@ -37,11 +37,25 @@ A real-time **hand-gesture-controlled drawing interface** built with **OpenCV** 
 ---
 
 ## Run the Script
+### Clone the repo
 ```bash
-git clone https://github.com/yourusername/cyberhand-interface.git
-cd cyberhand-interface
+git clone https://github.com/madelinenavea/hand_tracking.git
+cd hand_tracking
+```
+
+### (Optional) create and activate a Python virtual environment
+```bash
+python3 -m venv venv
+```
+
+### Install dependencies
+```bash
 pip install opencv-python mediapipe numpy
-python main.py
+```
+
+### Run the tracking script
+```bash
+python hand_tracking.py
 ```
 
 ## How It Works

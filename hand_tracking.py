@@ -21,10 +21,18 @@
 import cv2
 import mediapipe as mp
 import math
+import numpy as np
 
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
 mp_styles = mp.solutions.drawing_styles
+
+# CYBERNETIC THEME COLORS
+CYBER_CYAN = (255, 255, 0)
+CYBER_MAGENTA = (255, 0, 255)
+CYBER_BLUE = (255, 100, 0)
+CYBER_DARK = (20, 20, 20)
+CYBER_GRID = (80, 80, 40)
 
 #===================
 # GESTURE FUNCTIONS
@@ -78,7 +86,7 @@ def classify_gesture(fingers, hand_landmarks):
     pinky   = fingers["pinky"]
     thumb   = fingers["thumb"]
 
-    # curled fingers (or toes...)
+    # curled fingers
     curled_index  = curled_fingers(index_tip, hand_landmarks.landmark[6], hand_landmarks.landmark[5])
     curled_middle = curled_fingers(middle_tip, hand_landmarks.landmark[10], hand_landmarks.landmark[9])
     curled_ring   = curled_fingers(ring_tip, hand_landmarks.landmark[14], hand_landmarks.landmark[13])
@@ -174,31 +182,92 @@ def hand_roll_angle(hand_landmarks):
 
     return angle
 
+def shift_canvas(canvas, dx, dy):
+    h, w, _ = canvas.shape
+    new_canvas = np.zeros_like(canvas)
+
+    x1 = max(0, dx)
+    x2 = min(w, w + dx)
+    y1 = max(0, dy)
+    y2 = min(h, h + dy)
+
+    src_x1 = max(0, -dx)
+    src_x2 = src_x1 + (x2 - x1)
+    src_y1 = max(0, -dy)
+    src_y2 = src_y1 + (y2 - y1)
+
+    new_canvas[y1:y2, x1:x2] = canvas[src_y1:src_y2, src_x1:src_x2]
+    return new_canvas
+
+def draw_cyber_grid(frame, grid_size=40, frame_count=0):
+    h, w = frame.shape[:2]
+    offset = int(frame_count * 0.5) % grid_size
+    
+    # vertical lines
+    for x in range(-offset, w, grid_size):
+        alpha = 0.3 if (x // grid_size) % 2 == 0 else 0.15
+        color = tuple(int(c * alpha) for c in CYBER_GRID)
+        cv2.line(frame, (x, 0), (x, h), color, 1)
+    
+    # horizontal lines
+    for y in range(-offset, h, grid_size):
+        alpha = 0.3 if (y // grid_size) % 2 == 0 else 0.15
+        color = tuple(int(c * alpha) for c in CYBER_GRID)
+        cv2.line(frame, (0, y), (w, y), color, 1)
+
+def draw_scanlines(frame, spacing=4):
+    h, w = frame.shape[:2]
+    for y in range(0, h, spacing):
+        frame[y:y+1] = frame[y:y+1] * 0.9
+
+def draw_glitch_box(frame, x1, y1, x2, y2, color, thickness=2):
+    corner_len = 20
+    
+    # top left
+    cv2.line(frame, (x1, y1), (x1 + corner_len, y1), color, thickness)
+    cv2.line(frame, (x1, y1), (x1, y1 + corner_len), color, thickness)
+    
+    # top right
+    cv2.line(frame, (x2 - corner_len, y1), (x2, y1), color, thickness)
+    cv2.line(frame, (x2, y1), (x2, y1 + corner_len), color, thickness)
+    
+    # bottom left
+    cv2.line(frame, (x1, y2), (x1 + corner_len, y2), color, thickness)
+    cv2.line(frame, (x1, y2 - corner_len), (x1, y2), color, thickness)
+    
+    # bottom right
+    cv2.line(frame, (x2 - corner_len, y2), (x2, y2), color, thickness)
+    cv2.line(frame, (x2, y2 - corner_len), (x2, y2), color, thickness)
+
 #===================
 # TRACKING VIDEO  
 #===================
 def run_tracking():
     cam = cv2.VideoCapture(0)
     canvas = None
+    dragging = False
+    prev_fist_pos = None
     prev_point = None
+    frame_count = 0
 
-    # testing color turns
-    colors = [(255, 255, 255), # white
-              (255,0,0), # red
-              (255, 151, 0), # orange
-              (255,255,0), # yellow
-              (0,255,0), # green
-              (0,0,255), # blue
-              (151, 0 ,255), # purple
-              (255,0,255)] # pink
+    # CYBERPUNK COLOR PALETTE
+    colors = [
+        (255, 255, 255),
+        (0, 0, 255),
+        (0, 165, 255),
+        (0, 255, 255),
+        (0, 255, 0),
+        (255, 255, 0),
+        (255, 0, 255),
+        (255, 0, 128)]
 
     color_index = 0
-    current_color = 0
+    current_color = colors[0]
 
-    # init MediaPipe Hands model
+    # init MediaPipe 
     with mp_hands.Hands(
         model_complexity=0,
-        max_num_hands=1,
+        max_num_hands=2,
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5,
     ) as hands:
@@ -207,6 +276,8 @@ def run_tracking():
             success, frame = cam.read()
             if not success:
                 continue
+
+            frame_count += 1
 
             # create canvas for drawing
             if canvas is None:
@@ -221,13 +292,13 @@ def run_tracking():
             if hand_results.multi_hand_landmarks:
                 for hand_landmarks in hand_results.multi_hand_landmarks:
 
-                    # draw hands
+                    # draw hands with cyber glow
                     mp_drawing.draw_landmarks(
                         frame,
                         hand_landmarks,
                         mp_hands.HAND_CONNECTIONS,
-                        mp_styles.get_default_hand_landmarks_style(),
-                        mp_styles.get_default_hand_connections_style(),
+                        mp_drawing.DrawingSpec(color=CYBER_CYAN, thickness=2, circle_radius=3),
+                        mp_drawing.DrawingSpec(color=CYBER_MAGENTA, thickness=2)
                     )
 
                     # classify the gesture
@@ -236,61 +307,111 @@ def run_tracking():
                     if gesture:
                         gesture_text = gesture
 
-                    # fingertip
                     frame_w = frame.shape[1]
                     frame_h = frame.shape[0]
-                    # find position
                     x = int(hand_landmarks.landmark[8].x * frame_w)
                     y = int(hand_landmarks.landmark[8].y * frame_h)
 
-                    # flip text
-                    x = frame_w - x  
+                    x = frame_w - x
                     draw_point = (x, y)
 
+                    if gesture == "Closed Fist":
+                        if not dragging:
+                            dragging = True
+                            prev_fist_pos = draw_point
+                        else:
+                            dx = draw_point[0] - prev_fist_pos[0]
+                            dy = draw_point[1] - prev_fist_pos[1]
+
+                            if abs(dx) > 0 or abs(dy) > 0:
+                                canvas = shift_canvas(canvas, -dx, dy)
+
+                            prev_fist_pos = draw_point
+
+
+                    else:
+                        dragging = False
+                        prev_fist_pos = None
+
                     if gesture == "Open Palm":
-                        # compute simple roll using wrist which is middle MCP
+                        # compute roll using wrist
                         wrist = hand_landmarks.landmark[0]
                         middle_tip = hand_landmarks.landmark[12]
                         dx = middle_tip.x - wrist.x
                         # if open hand is tilted enough, switch color
                         if dx < -0.10:
-                            color_index = 0
-                        elif -0.10 <= dx < -0.05:
-                            color_index = 1
-                        elif -0.05 <= dx < 0.00:
-                            color_index = 2
-                        elif 0.00 <= dx < 0.05:
-                            color_index = 3
-                        elif 0.05 <= dx < 0.10:
-                            color_index = 4
-                        elif 0.10 <= dx < 0.15:
-                            color_index = 5
-                        elif 0.15 <= dx < 0.20:
-                            color_index = 6
-                        else:
                             color_index = 7
+                        elif -0.10 <= dx < -0.05:
+                            color_index = 6
+                        elif -0.05 <= dx < 0.00:
+                            color_index = 5
+                        elif 0.00 <= dx < 0.05:
+                            color_index = 4
+                        elif 0.05 <= dx < 0.10:
+                            color_index = 3
+                        elif 0.10 <= dx < 0.15:
+                            color_index = 2
+                        elif 0.15 <= dx < 0.20:
+                            color_index = 1
+                        else:
+                            color_index = 0
                         current_color = colors[color_index]
-
-
-               # white, red, orange, yellow, green, blue, purple, pink 
 
             # flip frame
             frame = cv2.flip(frame, 1)
             canvas = cv2.flip(canvas, 1)
 
-            # Draw text
-            if gesture_text:
-                cv2.putText(frame, gesture_text, (30, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), # Don't forgest to change color!!!!
-                    3)
+            # add grid background
+            draw_cyber_grid(frame, grid_size=40, frame_count=frame_count)
 
+            # cyberpunk styling
+            if gesture_text:
+                # text
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 1.0
+                font_thickness = 2
+                text_size = cv2.getTextSize(gesture_text, font, font_scale, font_thickness)[0]
+                
+                # background and cyber corners
+                padding = 20
+                bg_x1 = 20
+                bg_y1 = 20
+                bg_x2 = bg_x1 + text_size[0] + padding * 2
+                bg_y2 = bg_y1 + text_size[1] + padding * 2
+                
+                # dark background
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (bg_x1, bg_y1), (bg_x2, bg_y2), CYBER_DARK, -1)
+                frame = cv2.addWeighted(overlay, 0.8, frame, 0.2, 0)
+                
+                # cyber corner brackets
+                draw_glitch_box(frame, bg_x1, bg_y1, bg_x2, bg_y2, CYBER_CYAN, 2)
+                
+                # make text glow
+                text_x = bg_x1 + padding
+                text_y = bg_y1 + text_size[1] + padding - 5
+                
+                # outer glow
+                for offset in range(3, 0, -1):
+                    alpha = 0.3 / offset
+                    glow_color = tuple(int(c * alpha) for c in CYBER_CYAN)
+                    cv2.putText(frame, gesture_text, (text_x, text_y),
+                               font, font_scale, glow_color, font_thickness + offset * 2)
+                
+                # main text
+                cv2.putText(frame, gesture_text, (text_x, text_y),
+                           font, font_scale, CYBER_CYAN, font_thickness)
+
+            # drawing/erasing
             if gesture_text == "Eraser" and draw_point is not None:
                 if prev_point is not None:
                     cv2.line(canvas, prev_point, draw_point, (0, 0, 0), 20)
                 prev_point = draw_point
             elif gesture_text == "Pointing/Drawing" and draw_point is not None:
                 if prev_point is not None:
-                    cv2.line(canvas, prev_point, draw_point, current_color, 5)
+                    # making drawing glow
+                    cv2.line(canvas, prev_point, draw_point, current_color, 8)
+                    cv2.line(canvas, prev_point, draw_point, (255, 255, 255), 3)
                 prev_point = draw_point
             elif gesture_text == "i in ASL":
                 canvas[:] = 0
@@ -303,15 +424,72 @@ def run_tracking():
             mask = gray > 0
             frame[mask] = canvas[mask]
             
-            # make color wheel
-            circle_radius = 20
-            circle_x = frame.shape[1] - 40
-            circle_y = 40
-            cv2.circle(frame, (circle_x, circle_y), circle_radius, current_color, -1)
-            cv2.rectangle(frame, (circle_x-circle_radius-2, circle_y-circle_radius-2), (circle_x+circle_radius+2, circle_y+circle_radius+2), (255,255,255), 1)
+            # colors
+            palette_width = 300
+            palette_height = 90
+            palette_x = frame.shape[1] - palette_width - 20
+            palette_y = 20
             
-            # title
-            cv2.imshow("Hand Tracking", frame)
+            # dark background
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (palette_x, palette_y), 
+                         (palette_x + palette_width, palette_y + palette_height), 
+                         CYBER_DARK, -1)
+            frame = cv2.addWeighted(overlay, 0.8, frame, 0.2, 0)
+            
+            # cyber corner brackets
+            draw_glitch_box(frame, palette_x, palette_y, 
+                          palette_x + palette_width, palette_y + palette_height, 
+                          CYBER_MAGENTA, 2)
+            
+            # title with glow
+            title_text = "COLOR MATRIX"
+            cv2.putText(frame, title_text, (palette_x + 12, palette_y + 28),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, CYBER_DARK, 3)
+            cv2.putText(frame, title_text, (palette_x + 10, palette_y + 26),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, CYBER_MAGENTA, 1)
+            
+            # draw color circles with cyber styling
+            circle_radius = 16
+            start_x = palette_x + 20
+            circle_y = palette_y + 60
+            spacing = 35
+            
+            for i, color in enumerate(colors):
+                circle_x = start_x + i * spacing
+                
+                # draw outer glow ring if selected
+                if i == color_index:
+                    for r in range(28, 22, -2):
+                        alpha = 0.4 * (28 - r) / 6
+                        glow_color = tuple(int(c * alpha) for c in CYBER_CYAN)
+                        cv2.circle(frame, (circle_x, circle_y), r, glow_color, 1)
+                    
+                    # hexagon effect
+                    cv2.circle(frame, (circle_x, circle_y), circle_radius + 6, 
+                              CYBER_CYAN, 2)
+                
+                # draw color circle with dark border
+                cv2.circle(frame, (circle_x, circle_y), circle_radius + 1, 
+                          CYBER_DARK, -1)
+                cv2.circle(frame, (circle_x, circle_y), circle_radius, color, -1)
+                
+                # inner highlight
+                cv2.circle(frame, (circle_x - 4, circle_y - 4), 3, 
+                          (255, 255, 255), -1)
+            
+            # add scanline effect
+            draw_scanlines(frame, spacing=4)
+            
+            # HUD-style corner indicators
+            h, w = frame.shape[:2]
+            cv2.line(frame, (10, 10), (40, 10), CYBER_CYAN, 2)
+            cv2.line(frame, (10, 10), (10, 40), CYBER_CYAN, 2)
+            cv2.line(frame, (w-40, 10), (w-10, 10), CYBER_CYAN, 2)
+            cv2.line(frame, (w-10, 10), (w-10, 40), CYBER_CYAN, 2)
+            
+            # display window
+            cv2.imshow("CYBERHAND INTERFACE", frame)
 
             # unflip canvas so drawing maps onto the finger
             canvas = cv2.flip(canvas, 1)
@@ -326,5 +504,4 @@ def run_tracking():
 # MAIN FUNCTION
 #===================
 if __name__ == "__main__":
-    import numpy as np
     run_tracking()
